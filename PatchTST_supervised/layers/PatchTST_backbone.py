@@ -12,6 +12,28 @@ import numpy as np
 from layers.PatchTST_layers import *
 from layers.RevIN import RevIN
 
+
+# --------------------------------------------------------------------------- #
+#  Low-rank (LoRA-style) linear forecasting head
+# --------------------------------------------------------------------------- #
+# The flatten head maps the flattened backbone output (dim H = d_model*patch_num)
+# to the forecast horizon (dim N = target_window). Its weight W has shape
+# [N, H] (PyTorch stores nn.Linear weight as [out, in]).
+#
+# To reduce the *capacity / power* of the head we factorise
+#         W (N x H)  =  A (N x r) @ B (r x H),     r << min(N, H)
+# implemented as two chained Linear layers:
+#         linear_B = nn.Linear(H, r, bias=False)   ->  weight is B  [r, H]
+#         linear_A = nn.Linear(r, N, bias=True)    ->  weight is A  [N, r]   (keeps bias)
+#         y = linear_A(linear_B(x)) = x @ B^T @ A^T + bias = x @ W^T + bias
+#
+# Change HEAD_LORA_RANK to set r (default 5).
+#   - HEAD_LORA_RANK = None        -> full-rank nn.Linear (original behaviour)
+#   - HEAD_LORA_RANK >= min(N, H)  -> also falls back to full rank (no benefit)
+# --------------------------------------------------------------------------- #
+HEAD_LORA_RANK = 5
+
+
 # Cell
 class PatchTST_backbone(nn.Module):
     def __init__(self, c_in:int, context_window:int, target_window:int, patch_len:int, stride:int, max_seq_len:Optional[int]=1024, 
@@ -20,6 +42,7 @@ class PatchTST_backbone(nn.Module):
                  padding_var:Optional[int]=None, attn_mask:Optional[Tensor]=None, res_attention:bool=True, pre_norm:bool=False, store_attn:bool=False,
                  pe:str='zeros', learn_pe:bool=True, fc_dropout:float=0., head_dropout = 0, padding_patch = None,
                  pretrain_head:bool=False, head_type = 'flatten', individual = False, revin = True, affine = True, subtract_last = False,
+                 head_rank:Optional[int]=HEAD_LORA_RANK,          # <-- low-rank head: r (None = full rank)
                  verbose:bool=False, **kwargs):
         
         super().__init__()
@@ -50,11 +73,13 @@ class PatchTST_backbone(nn.Module):
         self.pretrain_head = pretrain_head
         self.head_type = head_type
         self.individual = individual
+        self.head_rank = head_rank
 
         if self.pretrain_head: 
             self.head = self.create_pretrain_head(self.head_nf, c_in, fc_dropout) # custom head passed as a partial func with all its kwargs
         elif head_type == 'flatten': 
-            self.head = Flatten_Head(self.individual, self.n_vars, self.head_nf, target_window, head_dropout=head_dropout)
+            self.head = Flatten_Head(self.individual, self.n_vars, self.head_nf, target_window,
+                                     head_dropout=head_dropout, rank=head_rank)
         
     
     def forward(self, z):                                                                   # z: [bs x nvars x seq_len]
@@ -88,23 +113,41 @@ class PatchTST_backbone(nn.Module):
 
 
 class Flatten_Head(nn.Module):
-    def __init__(self, individual, n_vars, nf, target_window, head_dropout=0):
+    def __init__(self, individual, n_vars, nf, target_window, head_dropout=0, rank=HEAD_LORA_RANK):
         super().__init__()
         
         self.individual = individual
         self.n_vars = n_vars
+        self.rank = rank
+
+        # Use the low-rank factorisation only when a sensible r is given.
+        # (r must be a positive int strictly smaller than min(N, H), else a
+        #  factorisation has >= as many params / no rank reduction.)
+        self.low_rank = (rank is not None) and (rank > 0) and (rank < min(nf, target_window))
         
         if self.individual:
-            self.linears = nn.ModuleList()
-            self.dropouts = nn.ModuleList()
             self.flattens = nn.ModuleList()
+            self.dropouts = nn.ModuleList()
+            if self.low_rank:
+                self.linears_B = nn.ModuleList()   # B: [r, H]  (H -> r), no bias
+                self.linears_A = nn.ModuleList()   # A: [N, r]  (r -> N), bias
+            else:
+                self.linears = nn.ModuleList()
             for i in range(self.n_vars):
                 self.flattens.append(nn.Flatten(start_dim=-2))
-                self.linears.append(nn.Linear(nf, target_window))
+                if self.low_rank:
+                    self.linears_B.append(nn.Linear(nf, rank, bias=False))
+                    self.linears_A.append(nn.Linear(rank, target_window, bias=True))
+                else:
+                    self.linears.append(nn.Linear(nf, target_window))
                 self.dropouts.append(nn.Dropout(head_dropout))
         else:
             self.flatten = nn.Flatten(start_dim=-2)
-            self.linear = nn.Linear(nf, target_window)
+            if self.low_rank:
+                self.linear_B = nn.Linear(nf, rank, bias=False)            # B: [r, H]
+                self.linear_A = nn.Linear(rank, target_window, bias=True)  # A: [N, r]
+            else:
+                self.linear = nn.Linear(nf, target_window)
             self.dropout = nn.Dropout(head_dropout)
             
     def forward(self, x):                                 # x: [bs x nvars x d_model x patch_num]
@@ -112,13 +155,19 @@ class Flatten_Head(nn.Module):
             x_out = []
             for i in range(self.n_vars):
                 z = self.flattens[i](x[:,i,:,:])          # z: [bs x d_model * patch_num]
-                z = self.linears[i](z)                    # z: [bs x target_window]
+                if self.low_rank:
+                    z = self.linears_A[i](self.linears_B[i](z))   # W_i = A_i @ B_i
+                else:
+                    z = self.linears[i](z)                # z: [bs x target_window]
                 z = self.dropouts[i](z)
                 x_out.append(z)
             x = torch.stack(x_out, dim=1)                 # x: [bs x nvars x target_window]
         else:
             x = self.flatten(x)
-            x = self.linear(x)
+            if self.low_rank:
+                x = self.linear_A(self.linear_B(x))       # W = A @ B  (rank-r head)
+            else:
+                x = self.linear(x)
             x = self.dropout(x)
         return x
         
@@ -376,4 +425,3 @@ class _ScaledDotProductAttention(nn.Module):
 
         if self.res_attention: return output, attn_weights, attn_scores
         else: return output, attn_weights
-
