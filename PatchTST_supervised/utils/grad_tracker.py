@@ -37,6 +37,21 @@ is an across-iteration / across-epoch trace.
 
 The tracker is deliberately self-contained and defensive: a failure inside any
 metric is caught and written as NaN rather than killing training.
+
+NOTE ON THE LOW-RANK HEAD
+-------------------------
+When the forecasting head is the LoRA-style factorisation W = A @ B
+(head.linear_A + head.linear_B, see layers/PatchTST_backbone.py), the
+'head_linear' group now contains BOTH factors A and B:
+  * grad_inflow  is hooked on linear_A, so it is still exactly dL/d(head output)
+    -- the meaningful "signal arriving at the head".
+  * grad_outflow / fwd_branch_ratio now reference the r-dimensional bottleneck
+    between B and A (linear_A's input), NOT the H-dimensional flatten input, so
+    they are not directly comparable to the full-rank head's values.
+  * the capacity columns (cap_*) are the AVERAGE over the two factor matrices
+    A:[N,r] and B:[r,H]; each is rank <= r by construction, so the effective
+    head weight W = A @ B is rank-capped at r. That cap is the whole point of
+    the modification, not a pathology.
 """
 
 import os
@@ -57,7 +72,10 @@ _LAYER_ATTN = re.compile(r'^(?P<root>.+?\.encoder\.layers\.(?P<idx>\d+))\.self_a
 _LAYER_FFN  = re.compile(r'^(?P<root>.+?\.encoder\.layers\.(?P<idx>\d+))\.ff\.')
 _WP         = re.compile(r'^(?P<root>.+?)\.W_P\.(weight|bias)$')
 _WPOS       = re.compile(r'^(?P<root>.+?)\.W_pos$')
-_HEAD       = re.compile(r'^(?P<root>.+?\.head)\.(linear|linears)\b')
+# Head: match the original full-rank submodules (linear / linears) AND the
+# low-rank factors (linear_A / linear_B / linears_A / linears_B).
+# Longer alternatives MUST come first so e.g. 'linear_A' is not eaten by 'linear'.
+_HEAD       = re.compile(r'^(?P<root>.+?\.head)\.(?P<kind>linears_A|linears_B|linear_A|linear_B|linears|linear)\b')
 _REVIN      = re.compile(r'^(?P<root>.+?\.revin_layer)\.affine_(weight|bias)$')
 
 
@@ -101,8 +119,18 @@ def classify(name):
 
     m = _HEAD.match(name)
     if m:
-        kind = m.group(2)
-        container = (m.group('root') + '.linear') if kind == 'linear' else None
+        kind = m.group('kind')
+        root = m.group('root')
+        # container = a real nn.Module we can hook for inflow/outflow/branch ratio.
+        if kind == 'linear':
+            container = root + '.linear'          # full-rank, non-individual
+        elif kind in ('linear_A', 'linear_B'):
+            container = root + '.linear_A'         # low-rank, non-individual: hook the
+                                                   # output factor A -> grad_inflow is
+                                                   # still dL/d(head output)
+        else:
+            container = None                       # individual heads (ModuleList):
+                                                   # param-side metrics only
         return (f'{pfx}head_linear', container, (prank, 2, 0, 0))
 
     m = _REVIN.match(name)
