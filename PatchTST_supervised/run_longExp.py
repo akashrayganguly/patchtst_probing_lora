@@ -49,6 +49,11 @@ if __name__ == '__main__':
     parser.add_argument('--decomposition', type=int, default=0, help='decomposition; True 1 False 0')
     parser.add_argument('--kernel_size', type=int, default=25, help='decomposition-kernel')
     parser.add_argument('--individual', type=int, default=0, help='individual head; True 1 False 0')
+    # Low-rank (LoRA-style) forecasting head: W (N x H) = A (N x r) @ B (r x H).
+    #   r <= 0  -> original full-rank nn.Linear head (use for a baseline run)
+    parser.add_argument('--head_rank', type=int, default=None,
+                        help='low-rank forecasting head rank r (LoRA-style); <=0 uses the full-rank head. '
+                             'If omitted, falls back to env var PATCHTST_HEAD_RANK, then HEAD_LORA_RANK in PatchTST_backbone.py')
 
     # Formers 
     parser.add_argument('--embed_type', type=int, default=0, help='0: default 1: value embedding + temporal embedding + positional embedding 2: value embedding + temporal embedding 3: value embedding + positional embedding 4: value embedding')
