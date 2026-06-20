@@ -1,0 +1,24 @@
+ETTh1_336_96_PatchTST_ETTh1_ftM_sl336_ll48_pl96_dm16_nh4_el3_dl1_df128_fc1_ebtimeF_dtTrue_Exp_0  
+mse:0.3814845681190491, mae:0.4050005078315735, rse:0.5856712460517883
+
+ETTh1_336_192_PatchTST_ETTh1_ftM_sl336_ll48_pl192_dm16_nh4_el3_dl1_df128_fc1_ebtimeF_dtTrue_Exp_0  
+mse:0.4136582016944885, mae:0.421055406332016, rse:0.6107627153396606
+
+ETTh1_336_336_PatchTST_ETTh1_ftM_sl336_ll48_pl336_dm16_nh4_el3_dl1_df128_fc1_ebtimeF_dtTrue_Exp_0  
+mse:0.4310069680213928, mae:0.43535521626472473, rse:0.627579391002655
+
+ETTh1_336_720_PatchTST_ETTh1_ftM_sl336_ll48_pl720_dm16_nh4_el3_dl1_df128_fc1_ebtimeF_dtTrue_Exp_0  
+mse:0.4492332339286804, mae:0.465800404548645, rse:0.6437555551528931
+
+national_illness_104_24_PatchTST_custom_ftM_sl104_ll48_pl24_dm16_nh4_el3_dl1_df128_fc1_ebtimeF_dtTrue_Exp_0  
+mse:1.30096435546875, mae:0.73440021276474, rse:0.5504332184791565
+
+national_illness_104_36_PatchTST_custom_ftM_sl104_ll48_pl36_dm16_nh4_el3_dl1_df128_fc1_ebtimeF_dtTrue_Exp_0  
+mse:1.6583483219146729, mae:0.897628128528595, rse:0.6176236271858215
+
+national_illness_104_48_PatchTST_custom_ftM_sl104_ll48_pl48_dm16_nh4_el3_dl1_df128_fc1_ebtimeF_dtTrue_Exp_0  
+mse:1.6573781967163086, mae:0.879370927810669, rse:0.6158355474472046
+
+national_illness_104_60_PatchTST_custom_ftM_sl104_ll48_pl60_dm16_nh4_el3_dl1_df128_fc1_ebtimeF_dtTrue_Exp_0  
+mse:1.4357506036758423, mae:0.790333092212677, rse:0.5725645422935486
+
